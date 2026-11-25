@@ -1,0 +1,8 @@
+# 本地临时/测试文件，不进仓库
+_dev-preview.html
+_check.js
+*.bak
+*.tmp
+*.log
+Thumbs.db
+.DS_Store
