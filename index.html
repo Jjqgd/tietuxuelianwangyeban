@@ -311,6 +311,21 @@
   display: flex;
   gap: 6px;
 }
+/* ===== 工具栏右侧按钮组：固定单行，不换行、不溢出 ===== */
+.toolbar-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  justify-content: flex-end;
+  align-items: center;
+  margin-left: auto;
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+.toolbar-actions .btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
 
 /* ==================== 视觉刷新 2026：圆角 / 柔和阴影 / 渐变按钮 ==================== */
 :root{
@@ -2757,7 +2772,7 @@ function renderFavReview() {
     }
 
     if (favQs.length === 0) {
-      appContainer.innerHTML = `<div style="margin-bottom:10px;"><button class="btn btn-outline" onclick="currentMode='home';render()">⬅ 返回</button></div><div class="card" style="text-align:center;padding:30px;">🔖 当前题库暂无收藏题目</div>`;
+      appContainer.innerHTML = `<div style="margin-bottom:10px;"><button class="btn btn-outline" onclick="currentMode='home';render()">返回</button></div><div class="card" style="text-align:center;padding:30px;">🔖 当前题库暂无收藏题目</div>`;
       return;
     }
 
@@ -2768,13 +2783,13 @@ function renderFavReview() {
 
     var html = `<div class="toolbar" style="padding:10px;">
       <div style="display:flex; align-items:center; gap:10px;">
-        <button class="btn btn-outline" style="padding:6px 12px;font-size:0.85rem;" onclick="currentMode='home';render()">⬅ 返回</button>
+        <button class="btn btn-outline" style="padding:6px 12px;font-size:0.85rem;" onclick="currentMode='home';render()">返回</button>
         <div class="q-progress" style="font-size:0.9rem;">收藏夹 (${favQs.length})</div>
       </div>
-      <div style="display:flex; gap:8px; align-items:center;">
-        <button class="btn btn-outline btn-small" onclick="toggleFavBrowse()">📄 翻页</button>
+      <div class="toolbar-actions" style="gap:8px;">
+        <button class="btn btn-outline btn-small" onclick="toggleFavBrowse()">翻页</button>
         <button class="btn btn-outline btn-small" onclick="openFavSheet()">答题卡</button>
-        <button class="btn btn-danger btn-small" onclick="clearAllFav()">🗑️ 剔除</button>
+        <button class="btn btn-danger btn-small" onclick="clearAllFav()">剔除</button>
       </div>
     </div>`;
 
@@ -2930,11 +2945,11 @@ function renderFavPage() {
     appContainer.innerHTML = `
       <div class="toolbar" style="padding:10px;">
         <div style="display:flex; align-items:center; gap:10px;">
-          <button class="btn btn-outline" style="padding:6px 12px;font-size:0.85rem;" onclick="currentMode='home';render()">⬅ 返回</button>
+          <button class="btn btn-outline" style="padding:6px 12px;font-size:0.85rem;" onclick="currentMode='home';render()">返回</button>
           <div class="q-progress" style="font-size:0.9rem;">${window.favPageIndex+1} / ${favQs.length}</div>
         </div>
-        <div style="display:flex; gap:8px; align-items:center;">
-          <button class="btn btn-outline btn-small" onclick="toggleFavBrowse()">📜 滑动</button>
+        <div class="toolbar-actions" style="gap:8px;">
+          <button class="btn btn-outline btn-small" onclick="toggleFavBrowse()">滑动</button>
           <button class="btn btn-outline btn-small" onclick="openFavSheet()">答题卡</button>
         </div>
       </div>
@@ -3159,7 +3174,7 @@ function renderStudyStats() {
       <div style="font-size:0.62rem;color:#10b981;font-weight:bold;">${acc}%</div>
     </div>`;
   }
-  var html = `<div style="margin-bottom:12px;"><button class="btn btn-outline" onclick="currentMode='home';render()">⬅ 返回</button></div>`;
+  var html = `<div style="margin-bottom:12px;"><button class="btn btn-outline" onclick="currentMode='home';render()">返回</button></div>`;
   html += `<div class="card"><div class="title">📈 学习数据总览</div>
     <div class="stats">
       <div class="stat-item"><div class="stat-num">${totalDone}</div><div class="stat-label">累计做题</div></div>
@@ -4056,7 +4071,7 @@ function renderWrongHistory() {
   var curName = (activeBankId && allBanks[activeBankId]) ? allBanks[activeBankId].name : '（未选择题库）';
 
   if (!items.length) {
-    appContainer.innerHTML = `<div style="margin-bottom:12px;"><button class="btn btn-outline" onclick="currentMode='home';render()">⬅ 返回</button></div>
+    appContainer.innerHTML = `<div style="margin-bottom:12px;"><button class="btn btn-outline" onclick="currentMode='home';render()">返回</button></div>
       <div class="card" style="text-align:center;padding:30px;">🗂️ 还没有任何错题</div><div class="footer">技术支持：秦十三郎</div>`;
     return;
   }
@@ -4079,14 +4094,11 @@ function renderWrongHistory() {
 
   var html = `<div class="toolbar" style="padding:10px;">
     <div style="display:flex;align-items:center;gap:8px;">
-      <button class="btn btn-outline" style="padding:6px 12px;font-size:0.85rem;" onclick="currentMode='home';render()">⬅ 返回</button>
-      <div class="q-progress" style="font-size:0.9rem;">历史错题 (${uniqCount})</div>
+      <button class="btn btn-outline" style="padding:6px 12px;font-size:0.85rem;" onclick="currentMode='home';render()">返回</button><!-- 历史错题计数已按需求移除 -->
     </div>
-    <div class="toolbar-right-col">
-      <div class="toolbar-row">
-        <button class="btn btn-primary btn-small" style="padding:6px 10px;font-size:0.75rem;" onclick="extractAllWrongToCurrentBank()">📥 一键提取全部</button>
-        <button class="btn btn-danger-ghost btn-small" style="padding:6px 10px;font-size:0.75rem;" onclick="clearAllWrongHistory()">🗑️ 一键剔除</button>
-      </div>
+    <div class="toolbar-actions">
+      <button class="btn btn-primary btn-small" style="padding:6px 10px;font-size:0.75rem;" onclick="extractAllWrongToCurrentBank()">一键提取</button>
+      <button class="btn btn-danger-ghost btn-small" style="padding:6px 10px;font-size:0.75rem;" onclick="clearAllWrongHistory()">一键剔除</button>
     </div>
   </div>`;
 
@@ -4257,7 +4269,7 @@ function renderReview() {
     var currentWrong = wrongBook.filter(function(w){ return w.bankId === activeBankId; });
 
     if (!currentWrong || currentWrong.length === 0) {
-      appContainer.innerHTML = `<div style="margin-bottom:10px;"><button class="btn btn-outline" onclick="currentMode='home';render()">⬅ 返回</button></div><div class="card" style="text-align:center;padding:30px;">🎉 当前题库暂无错题</div>`;
+      appContainer.innerHTML = `<div style="margin-bottom:10px;"><button class="btn btn-outline" onclick="currentMode='home';render()">返回</button></div><div class="card" style="text-align:center;padding:30px;">🎉 当前题库暂无错题</div>`;
       return;
     }
 
@@ -4270,18 +4282,14 @@ function renderReview() {
     var targetStreak = parseInt(localStorage.getItem('xjt_streak_target')) || 5;
     var html = `<div class="toolbar" style="padding:10px;">
       <div style="display:flex; align-items:center; gap:10px;">
-        <button class="btn btn-outline btn-small" style="padding:6px 12px;font-size:0.85rem;" onclick="currentMode='home';render()">⬅ 返回</button>
+        <button class="btn btn-outline btn-small" style="padding:6px 12px;font-size:0.85rem;" onclick="currentMode='home';render()">返回</button>
         <div class="q-progress" style="font-size:0.9rem;">错题本 (${currentWrong.length})</div>
       </div>
-      <div class="toolbar-right-col">
-        <div class="toolbar-row">
-          <button class="btn btn-danger-ghost btn-small" style="padding:6px 8px;font-size:0.75rem;" onclick="clearAllWrong()">🗑️ 剔除</button>
-          <button class="btn btn-outline btn-small" style="padding:6px 8px;font-size:0.75rem;" onclick="exportWrongToPrint()">🖨️ 导出</button>
-        </div>
-        <div class="toolbar-row">
-          <button class="btn btn-outline btn-small" style="padding:6px 8px;font-size:0.75rem;" onclick="toggleReviewBrowse()">📄 翻页</button>
-          <button class="btn btn-outline btn-small" style="padding:6px 8px;font-size:0.75rem;" onclick="openReviewSheet()">答题卡</button>
-        </div>
+      <div class="toolbar-actions" style="gap:5px;">
+        <button class="btn btn-danger-ghost btn-small" style="padding:6px 8px;font-size:0.75rem;" onclick="clearAllWrong()">剔除</button>
+        <button class="btn btn-outline btn-small" style="padding:6px 8px;font-size:0.75rem;" onclick="exportWrongToPrint()">导出</button>
+        <button class="btn btn-outline btn-small" style="padding:6px 8px;font-size:0.75rem;" onclick="toggleReviewBrowse()">翻页</button>
+        <button class="btn btn-outline btn-small" style="padding:6px 8px;font-size:0.75rem;" onclick="openReviewSheet()">答题卡</button>
       </div>
     </div>`;
 
@@ -4420,7 +4428,7 @@ function renderReview() {
     var allWrong = wrongBook.filter(function (w){ return w.bankId === activeBankId; });
 
     if (!allWrong || allWrong.length === 0) {
-      appContainer.innerHTML = `<div style="margin-bottom:10px;"><button class="btn btn-outline" onclick="currentMode='home';render()">⬅ 返回</button></div><div class="card" style="text-align:center;padding:30px;">🎉 当前题库暂无错题</div>`;
+      appContainer.innerHTML = `<div style="margin-bottom:10px;"><button class="btn btn-outline" onclick="currentMode='home';render()">返回</button></div><div class="card" style="text-align:center;padding:30px;">🎉 当前题库暂无错题</div>`;
       return;
     }
 
@@ -4429,7 +4437,7 @@ function renderReview() {
     window.reviewAllWrong = allWrong;
 
     if (!currentWrong || currentWrong.length === 0) {
-      appContainer.innerHTML = `<div style="margin-bottom:10px;"><button class="btn btn-outline" onclick="currentMode='home';render()">⬅ 返回</button></div>${buildReviewFilterBar(allWrong)}<div class="card" style="text-align:center;padding:30px;">该筛选条件下暂无错题</div>`;
+      appContainer.innerHTML = `<div style="margin-bottom:10px;"><button class="btn btn-outline" onclick="currentMode='home';render()">返回</button></div>${buildReviewFilterBar(allWrong)}<div class="card" style="text-align:center;padding:30px;">该筛选条件下暂无错题</div>`;
       return;
     }
 
@@ -4443,18 +4451,14 @@ function renderReview() {
     
     var html = `<div class="toolbar" style="padding:10px;">
       <div style="display:flex; align-items:center; gap:10px;">
-        <button class="btn btn-outline" style="padding:6px 12px;font-size:0.85rem;" onclick="currentMode='home';render()">⬅ 返回</button>
+        <button class="btn btn-outline" style="padding:6px 12px;font-size:0.85rem;" onclick="currentMode='home';render()">返回</button>
         <div class="q-progress" style="font-size:0.9rem;">错题本 (${currentWrong.length})</div>
       </div>
-      <div class="toolbar-right-col">
-        <div class="toolbar-row">
-          <button class="btn btn-danger-ghost btn-small" style="padding:6px 8px;font-size:0.75rem;" onclick="clearAllWrong()">🗑️ 剔除</button>
-          <button class="btn btn-outline btn-small" style="padding:6px 8px;font-size:0.75rem;" onclick="exportWrongToPrint()">🖨️ 导出</button>
-        </div>
-        <div class="toolbar-row">
-          <button class="btn btn-outline btn-small" style="padding:6px 8px;font-size:0.75rem;" onclick="toggleReviewBrowse()">📄 翻页</button>
-          <button class="btn btn-outline btn-small" style="padding:6px 8px;font-size:0.75rem;" onclick="openReviewSheet()">答题卡</button>
-        </div>
+      <div class="toolbar-actions" style="gap:5px;">
+        <button class="btn btn-danger-ghost btn-small" style="padding:6px 8px;font-size:0.75rem;" onclick="clearAllWrong()">剔除</button>
+        <button class="btn btn-outline btn-small" style="padding:6px 8px;font-size:0.75rem;" onclick="exportWrongToPrint()">导出</button>
+        <button class="btn btn-outline btn-small" style="padding:6px 8px;font-size:0.75rem;" onclick="toggleReviewBrowse()">翻页</button>
+        <button class="btn btn-outline btn-small" style="padding:6px 8px;font-size:0.75rem;" onclick="openReviewSheet()">答题卡</button>
       </div>
     </div>`;
     html += buildReviewFilterBar(allWrong);
@@ -4636,7 +4640,7 @@ function swC(id, checked, label, onChangeFn){
 
   appContainer.innerHTML = `
     <div class="toolbar">
-      <button class="btn btn-outline" style="padding:6px 12px;font-size:0.85rem;" onclick="currentMode='home';render()">⬅ 返回</button>
+      <button class="btn btn-outline" style="padding:6px 12px;font-size:0.85rem;" onclick="currentMode='home';render()">返回</button>
       <div class="title" style="margin:0;border:none;padding:0;">模拟考试设置</div>
       <div style="width:50px;"></div>
     </div>
@@ -6263,18 +6267,14 @@ function renderReviewPage() {
     appContainer.innerHTML = `
       <div class="toolbar" style="padding:10px;">
         <div style="display:flex; align-items:center; gap:10px;">
-          <button class="btn btn-outline" style="padding:6px 12px;font-size:0.85rem;" onclick="currentMode='home';render()">⬅ 返回</button>
+          <button class="btn btn-outline" style="padding:6px 12px;font-size:0.85rem;" onclick="currentMode='home';render()">返回</button>
           <div class="q-progress" style="font-size:0.9rem; white-space:nowrap;">错题本 (${currentWrong.length})</div>
         </div>
-        <div class="toolbar-right-col">
-          <div class="toolbar-row">
-            <button class="btn btn-danger-ghost btn-small" style="padding:6px 8px;font-size:0.75rem;" onclick="clearAllWrong()">🗑️ 剔除</button>
-            <button class="btn btn-outline btn-small" style="padding:6px 8px;font-size:0.75rem;" onclick="exportWrongToPrint()">🖨️ 导出</button>
-          </div>
-          <div class="toolbar-row">
-            <button class="btn btn-outline btn-small" style="padding:6px 8px;font-size:0.75rem;" onclick="toggleReviewBrowse()">📜 滑动</button>
-            <button class="btn btn-outline btn-small" style="padding:6px 8px;font-size:0.75rem;" onclick="openReviewSheet()">答题卡</button>
-          </div>
+        <div class="toolbar-actions" style="gap:5px;">
+          <button class="btn btn-danger-ghost btn-small" style="padding:6px 8px;font-size:0.75rem;" onclick="clearAllWrong()">剔除</button>
+          <button class="btn btn-outline btn-small" style="padding:6px 8px;font-size:0.75rem;" onclick="exportWrongToPrint()">导出</button>
+          <button class="btn btn-outline btn-small" style="padding:6px 8px;font-size:0.75rem;" onclick="toggleReviewBrowse()">滑动</button>
+          <button class="btn btn-outline btn-small" style="padding:6px 8px;font-size:0.75rem;" onclick="openReviewSheet()">答题卡</button>
         </div>
       </div>
       ${buildReviewFilterBar(window.reviewAllWrong || currentWrong)}
