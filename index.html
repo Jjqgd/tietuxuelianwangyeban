@@ -6315,45 +6315,307 @@ function sanitizeFileName(name) {
 
 // 5+ App 环境：把 Blob 写入本地文件；浏览器环境：走 a[download] 下载
 // 回调 onDone(path, isPublicDir)：App 端先写手机“下载”目录，不行再写私有目录，两条路都保底
+// 最后一招：绕过 plus.io，直接用安卓/鸿蒙原生 FileOutputStream 写文件。
+// 有些鸿蒙机型的 FileWriter.write 写二进制会抛空错误，原生接口不受影响。
+function saveViaNativeJava(blob, fileName, onOk, onErr) {
+  try {
+    if (typeof plus === 'undefined' || !plus.android || !plus.android.runtimeMainActivity) { onErr('当前环境没有 plus.android'); return; }
+    var fr = new FileReader();
+    fr.onload = function () {
+      var fos = null, file = null;
+      try {
+        var dataUrl = String(fr.result || '');
+        var b64 = dataUrl.substring(dataUrl.indexOf(',') + 1);
+        if (!b64) { onErr('base64 为空'); return; }
+        console.log('[导出] 原生写入 base64 长度 = ' + b64.length);
+        var File = plus.android.importClass('java.io.File');
+        var FileOutputStream = plus.android.importClass('java.io.FileOutputStream');
+        var B64CLASS = plus.android.importClass('android.util.Base64');
+        var main = plus.android.runtimeMainActivity();
+        var dir = null;
+        try { dir = new File(main.getExternalFilesDir(null), '铁途学练导出'); } catch (e) { dir = null; }
+        if (!dir) { dir = new File(main.getFilesDir(), '铁途学练导出'); }
+        try { dir.mkdirs(); } catch (e) {}
+        file = new File(dir, fileName);
+        fos = new FileOutputStream(file);
+        // 关键：一整段约 1MB 的 base64 字符串经过 JS→Java 桥接会被丢掉，
+        // Base64.decode 于是返回 null，写入时就抛 NullPointerException（length of null array）。
+        // 改成拆小块：每次 8KB base64（约 6KB 原始字节）解码后立刻写入。
+        var CHUNK = 8192;
+        var i = 0, total = b64.length, chunks = 0;
+        while (i < total) {
+          var chunk = b64.substring(i, i + CHUNK);
+          var bytes = plus.android.invoke('android.util.Base64', 'decode', chunk, 0);
+          if (!bytes) { try { bytes = B64CLASS.decode(chunk, 0); } catch (x) {} }
+          if (!bytes) { throw new Error('Base64.decode 返回 null，偏移 ' + i); }
+          fos.write(bytes);
+          chunks++;
+          i += CHUNK;
+        }
+        fos.flush();
+        fos.close();
+        fos = null;
+        var sz = 0; try { sz = file.length(); } catch (x) {}
+        console.log('[导出] 原生写入完成，共 ' + chunks + ' 块，文件 ' + sz + ' 字节');
+        if (sz < 1000) { throw new Error('写入后文件只有 ' + sz + ' 字节，内容没落盘'); }
+        onOk(file.getAbsolutePath(), false);
+      } catch (e) {
+        try { if (fos) fos.close(); } catch (x) {}
+        var msg = String(e);
+        try { if (e && e.message) msg = e.message; } catch (x) {}
+        try { if (e && e.getClass) { var cn = e.getClass().getName(); if (cn) msg = cn + ": " + msg; } } catch (x) {}
+        onErr('原生写入失败：' + msg);
+      }
+    };
+    fr.onerror = function () { onErr('读取 PDF 数据失败'); };
+    fr.readAsDataURL(blob);
+  } catch (e) { onErr('原生写入异常：' + String(e)); }
+}
+
+// 把 5+ 的 IO 错误对象转成能看懂的文字（原来直接 console.error 只会打印 [object Object]）
+function debugIoErr(e) {
+  if (!e) return 'null';
+  if (typeof e === 'string') return e;
+  var parts = [];
+  try {
+    ['name', 'code', 'message', 'description'].forEach(function (k) {
+      if (e[k] !== undefined && e[k] !== null) parts.push(k + '=' + e[k]);
+    });
+  } catch (x) {}
+  if (parts.length === 0) { try { parts.push('keys=' + Object.keys(e).join(',')); } catch (x) {} }
+  try { var j = JSON.stringify(e); if (j && j !== '{}') parts.push('json=' + j.slice(0, 160)); } catch (x) {}
+  return parts.join(' | ') || String(e);
+}
+
+// 5+ App 环境：把 Blob 写入本地文件；浏览器环境：走 a[download] 下载
+// App 端策略：先转 ArrayBuffer 再写（比直接写 Blob 兼容性强得多）；
+// 目录按「下载目录 → 私有目录」依次尝试，原名写不进去再用纯英文文件名重来一遍。
 function savePdfBlob(blob, fileName, onDone, onFail) {
-  if (typeof plus !== 'undefined' && plus.io && plus.io.resolveLocalFileSystemURL) {
-    var settled = false;
-    function ok(p, isPub) { if (settled) return; settled = true; onDone(p, isPub); }
-    function bad(e) { if (settled) return; settled = true; onFail(e); }
-    function writeInto(dirEntry, isPub) {
-      dirEntry.getFile(fileName, { create: true, exclusive: false }, function(fileEntry) {
-        fileEntry.createWriter(function(writer) {
-          writer.onwrite = function() {
-            var p = fileEntry.fullPath || fileName;
-            try { if (plus.io.convertLocalFileSystemURL) p = plus.io.convertLocalFileSystemURL(p) || p; } catch (e) {}
-            ok(p, isPub);
-          };
-          writer.onerror = function(e) { bad(e); };
-          try { writer.write(blob); } catch (e) { bad(e); }
-        }, bad);
-      }, bad);
-    }
-    function privateDoc() {
-      plus.io.resolveLocalFileSystemURL('_doc/', function(root) {
-        root.getDirectory('铁途学练导出', { create: true }, function(dirEntry) {
-          writeInto(dirEntry, false);
-        }, bad);
-      }, bad);
-    }
-    try {
-      var downloadsUrl = plus.io.PUBLIC_DOWNLOADS || '_downloads/';
-      plus.io.resolveLocalFileSystemURL(downloadsUrl, function(dirEntry) {
-        writeInto(dirEntry, true);
-      }, privateDoc);
-    } catch (e) { privateDoc(); }
-  } else {
+  if (typeof plus === 'undefined' || !plus.io || !plus.io.resolveLocalFileSystemURL) {
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url; a.download = fileName;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(function(){ URL.revokeObjectURL(url); }, 5000);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
     onDone(fileName, true);
+    return;
   }
+
+  var settled = false;
+  var tried = [];
+  function ok(p, isPub) { if (settled) return; settled = true; onDone(p, isPub); }
+  function bad() { if (settled) return; settled = true; onFail(tried.join(' ; ')); }
+
+  var asciiName = 'tietuxuelian-' + (new Date().getTime()) + '.pdf';
+
+  function getTargets() {
+    var list = [];
+    try {
+      var dl = plus.io.PUBLIC_DOWNLOADS || '_downloads/';
+      list.push({ url: dl, isPub: true, label: '下载目录' });
+    } catch (e) {}
+    list.push({ url: '_doc/', sub: '铁途学练导出', isPub: false, label: '私有目录' });
+    list.push({ url: '_doc/', isPub: false, label: '私有根目录' });
+    return list;
+  }
+
+  function writeOnce(dirEntry, name, buf, isPub, next) {
+    dirEntry.getFile(name, { create: true, exclusive: false }, function (fe) {
+      fe.createWriter(function (w) {
+        var done = false;
+        w.onwrite = function () {
+          if (done) return; done = true;
+          var p = fe.fullPath || name;
+          try { if (plus.io.convertLocalFileSystemURL) p = plus.io.convertLocalFileSystemURL(p) || p; } catch (e) {}
+          ok(p, isPub);
+        };
+        w.onerror = function (e) {
+          if (done) return; done = true;
+          tried.push((isPub ? '下载目录' : '私有目录') + '写入失败(' + debugIoErr(e) + ')');
+          next();
+        };
+        try { w.write(buf); } catch (e) {
+          if (done) return; done = true;
+          tried.push((isPub ? '下载目录' : '私有目录') + '写入抛错(' + debugIoErr(e) + ')');
+          next();
+        }
+      }, function (e) { tried.push('createWriter失败(' + debugIoErr(e) + ')'); next(); });
+    }, function (e) { tried.push('getFile失败(' + debugIoErr(e) + ')'); next(); });
+  }
+
+  function resolveAndWrite(t, name, buf, next) {
+    plus.io.resolveLocalFileSystemURL(t.url, function (root) {
+      if (t.sub) {
+        root.getDirectory(t.sub, { create: true }, function (dir) {
+          writeOnce(dir, name, buf, t.isPub, next);
+        }, function (e) { tried.push(t.label + '建子目录失败(' + debugIoErr(e) + ')'); next(); });
+      } else {
+        writeOnce(root, name, buf, t.isPub, next);
+      }
+    }, function (e) { tried.push(t.label + '解析失败(' + debugIoErr(e) + ')'); next(); });
+  }
+
+  function runPass(name, buf, doneCb) {
+    var list = getTargets();
+    var i = 0;
+    function step() {
+      if (settled) return;
+      if (i >= list.length) { doneCb(); return; }
+      var t = list[i++];
+      resolveAndWrite(t, name, buf, step);
+    }
+    step();
+  }
+
+  function startIo() {
+  try {
+    var fr = new FileReader();
+    fr.onload = function () {
+      runPass(fileName, fr.result, function () {
+        if (settled) return;
+        tried.push('原名全部失败，改用英文文件名重试');
+        runPass(asciiName, fr.result, function () {
+          if (settled) return;
+          tried.push('改用 Blob 直写重试');
+          runPass(fileName, blob, function () {
+            tried.push('改用系统原生写入');
+            saveViaNativeJava(blob, fileName, function (p, isPub) { ok(p, isPub); }, function (e) {
+              tried.push('系统原生写入失败(' + debugIoErr(e) + ')');
+              bad();
+            });
+          });
+        });
+      });
+    };
+    fr.onerror = function () {
+      runPass(fileName, blob, function () {
+        runPass(asciiName, blob, function () { bad(); });
+      });
+    };
+    fr.readAsArrayBuffer(blob);
+  } catch (e) {
+    runPass(fileName, blob, function () {
+            tried.push('改用系统原生写入');
+            saveViaNativeJava(blob, fileName, function (p, isPub) { ok(p, isPub); }, function (e) {
+              tried.push('系统原生写入失败(' + debugIoErr(e) + ')');
+              bad();
+            });
+          });
+  }
+  }
+
+  // App 端优先走系统原生写入：App 专属目录不需要任何存储权限，也避开 plus.io 写二进制的老坑。
+  // 原生那条路失败才回落到上面这套 plus.io 多路径尝试。
+  saveViaNativeJava(blob, fileName, function (p, isPub) { ok(p, isPub); }, function (e) {
+    console.log('[导出] 原生写入失败，回落到 plus.io：' + e);
+    tried.push('原生写入失败(' + e + ')');
+    startIo();
+  });
+}
+
+
+/* ===== 逐页生成 PDF =====
+   老做法把整条长元素一次性交给 html2pdf，有几个坑：
+   1) html2canvas 拿不到显式宽高时算出的画布高度是 0，导出的 PDF 正文空白、只剩一张水印纸；
+   2) 题量一大整张画布能高到上万像素，手机上直接爆内存；
+   3) html2pdf 的 from() 会把元素搬进它自己的容器，搬完之后元素坐标就变了，
+      于是第二页往后全被截成空白。
+   现在：每页单独复制到一个固定在 (0,0) 的容器里截图 → 在画布上合成水印 → 逐页 addImage 拼进同一个 PDF。 */
+function buildPdfFromPages(element, wmDataUrl, onProgress) {
+  var pages = element.querySelectorAll('.pdf-page');
+  if (!pages || pages.length === 0) pages = [element];
+  var A4_W = 210, A4_H = 297, MARGIN = 10;
+  var CONTENT_W = A4_W - MARGIN * 2;
+  var CONTENT_H = A4_H - MARGIN * 2;
+  var baseCss = element.style.cssText || '';
+
+  // 水印直接在画布上画：不依赖 PNG 透明通道（jsPDF 对带 alpha 的整页 PNG 支持不稳，会糊成一页白雾）
+  function stampWatermark(cv) {
+    try {
+      var wc = cv.getContext('2d');
+      wc.save();
+      wc.globalAlpha = 0.07;
+      wc.translate(cv.width / 2, cv.height / 2);
+      wc.rotate(-Math.PI / 4);
+      wc.textAlign = 'center';
+      wc.textBaseline = 'middle';
+      wc.fillStyle = '#b71c1c';
+      wc.font = 'bold ' + Math.round(cv.width * 0.17) + 'px "SimSun","宋体",sans-serif';
+      wc.fillText('铁途学练', 0, 0);
+      try {
+        if (typeof authWmTag === 'function') {
+          wc.globalAlpha = 0.1;
+          wc.fillStyle = '#0d47a1';
+          wc.font = 'bold ' + Math.round(cv.width * 0.045) + 'px "SimSun","宋体",sans-serif';
+          wc.fillText('专属编号 ' + authWmTag(), 0, Math.round(cv.height * 0.075));
+        }
+      } catch (e) {}
+      wc.restore();
+    } catch (e) {}
+  }
+
+  var wmReady = Promise.resolve(true);
+
+  return wmReady.then(function () {
+    var blank = document.createElement('div');
+    blank.style.cssText = 'width:1px;height:1px;overflow:hidden;position:absolute;left:-9999px;top:0;';
+    document.body.appendChild(blank);
+
+    return html2pdf().set({ margin: 0, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }, image: { type: 'jpeg', quality: 0.95 } })
+      .from(blank).toPdf().get('pdf')
+      .then(function (pdf) {
+        if (blank.parentNode) blank.parentNode.removeChild(blank);
+        var reuseFirst = false;
+        try { pdf.deletePage(1); } catch (e) { reuseFirst = true; }
+
+        var total = pages.length;
+        var done = 0;
+        var chain = Promise.resolve();
+
+        [].forEach.call(pages, function (pg) {
+          chain = chain.then(function () {
+            var one = document.createElement('div');
+            one.style.cssText = baseCss + ' position:absolute; left:0; top:0; z-index:-1; pointer-events:none;';
+            one.appendChild(pg.cloneNode(true));
+            document.body.appendChild(one);
+
+            var rect = one.getBoundingClientRect();
+            var cw = Math.round(rect.width);
+            var ch = Math.round(rect.height);
+
+            var o = {
+              margin: 0,
+              html2canvas: {
+                scale: 2, useCORS: true, backgroundColor: '#ffffff',
+                width: cw, height: ch,
+                windowWidth: cw + 40, windowHeight: ch + 40,
+                x: 0, y: 0, scrollX: 0, scrollY: 0
+              },
+              jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+              image: { type: 'jpeg', quality: 0.95 },
+              pagebreak: { mode: [] }
+            };
+
+            return html2pdf().set(o).from(one).toCanvas().get('canvas').then(function (cv) {
+              /* 水印已随页面一起截图，无需在画布上重复绘制 */
+              var url = cv.toDataURL('image/jpeg', 0.95);
+              if (reuseFirst) { pdf.setPage(1); reuseFirst = false; }
+              else { pdf.addPage(); }
+              pdf.addImage(url, 'JPEG', MARGIN, MARGIN, CONTENT_W, CONTENT_H);
+              done++;
+              if (typeof onProgress === 'function') { try { onProgress(done, total); } catch (e) {} }
+              try { cv.width = 1; cv.height = 1; } catch (e) {}
+              if (one.parentNode) one.parentNode.removeChild(one);
+            }, function (err) {
+              if (one.parentNode) one.parentNode.removeChild(one);
+              throw err;
+            });
+          });
+        });
+
+        return chain.then(function () { return pdf; });
+      });
+  });
 }
 
 // 统一收尾：水印已加在 pdf 上，按环境落盘并提示导出状态
@@ -6367,12 +6629,23 @@ function finalizePdfExport(pdf, fileName, element, successMsg) {
   savePdfBlob(blob, fileName, function(path, isPublic) {
     clearTimeout(watchdog); cleanup();
     var inApp = (typeof plus !== 'undefined' && plus.io);
-    if (inApp) showToast('导出成功：' + fileName + (isPublic ? '（已存到手机下载目录）' : '（已存到 铁途学练导出 目录）'));
+    if (inApp) {
+      showToast('导出成功：' + fileName + (isPublic ? '（已存到手机下载目录）' : '（已存到 铁途学练导出 目录）'));
+      // App 里存完直接把文件交给系统打开，省得用户找不到目录
+      try {
+        var openPath = path;
+        if (openPath && openPath.indexOf('file://') !== 0 && openPath.charAt(0) === '/') openPath = 'file://' + openPath;
+        setTimeout(function () {
+          try { plus.runtime.openFile(openPath); } catch (e) { console.warn('打开文件失败', e); }
+        }, 800);
+      } catch (e) {}
+    }
     else showToast(successMsg || '导出成功，请保存或打印');
   }, function(err) {
     clearTimeout(watchdog); cleanup();
-    showToast('保存文件失败，请重试', true);
-    console.error(err);
+    var inApp2 = (typeof plus !== 'undefined' && plus.io);
+    showToast(inApp2 ? '保存失败：请检查手机是否允许本应用写入存储，然后重试' : '保存文件失败，请重试', true);
+    console.error('[导出] 保存失败：' + (err && (err.message || err.code || err) || '未知错误'), err);
   });
 }
 
@@ -6385,12 +6658,12 @@ function authWmTag() {
   } catch (e) { return 'TTXL'; }
 }
 function buildWmDataUrl() {
-  var c = document.createElement('canvas'); c.width = 1200; c.height = 1600;
+  var c = document.createElement('canvas'); c.width = 900; c.height = 1273;
   var x = c.getContext('2d');
   x.translate(c.width / 2, c.height / 2);
   x.rotate(-45 * Math.PI / 180);
   x.textAlign = 'center'; x.textBaseline = 'middle';
-  x.font = "bold 200px SimSun, 'KaiTi', 'STKaiti'";
+  x.font = "bold 150px SimSun, 'KaiTi', 'STKaiti'";
   x.fillStyle = 'rgba(183, 28, 28, 0.06)';
   x.fillText('铁途学练', 0, -40);
   x.font = "bold 52px SimSun, 'KaiTi'";
@@ -6417,22 +6690,31 @@ function exportWrongToPrint() {
   var sectionIndex = 0;
 
   var PAGE_W_MM = 190;
-  var PAGE_H_PX = 1047;
-  var MAX_H = 1000;
+  var PAGE_H_MM = 277;          // A4 可用高度 277mm，用 mm 单位保证与 190mm 宽同比
+  var MAX_H = 0;                // 已改为按每页实际高度动态计算，此变量仅保留占位
 
   var pagesWrap = document.createElement('div');
   // ★ 生成用的容器必须挪到屏幕外：以前它直接挂在 body 上，190mm 宽的长条会一直显示在页面底部，
   // 看上去像“预览页”，而且关不掉。这里放到视口外，html2canvas 仍能正常截图。
-  pagesWrap.style.cssText = 'position:fixed; left:-9999px; top:0; z-index:-1; pointer-events:none; width:' + PAGE_W_MM + 'mm; padding:0 15px; box-sizing:border-box; background:#fff; font-family:"SimSun","宋体",serif; font-size:13pt; line-height:1.6; color:#000;';
+  pagesWrap.style.cssText = 'position:absolute; left:0; top:0; z-index:-1; pointer-events:none; width:' + PAGE_W_MM + 'mm; padding:0 15px; box-sizing:border-box; background:#fff; font-family:"SimSun","宋体",serif; font-size:13pt; line-height:1.6; color:#000;';
   document.body.appendChild(pagesWrap);
 
   var curInner = null;
   function newPageInner() {
     var pageDiv = document.createElement('div');
     pageDiv.className = 'pdf-page';
-    pageDiv.style.cssText = 'width:100%; height:' + PAGE_H_PX + 'px; box-sizing:border-box; overflow:hidden; background:#fff;';
+    pageDiv.style.cssText = 'position:relative; width:100%; height:' + PAGE_H_MM + 'mm; box-sizing:border-box; overflow:hidden; background:#fff;';
     var inner = document.createElement('div');
+    inner.style.cssText = 'position:relative; z-index:2;';
     pageDiv.appendChild(inner);
+    // 水印直接画进页面里：跟着页面一起截图，位置恒定，也不会像整页 PNG 那样把正文糊成白雾
+    var wmLayer = document.createElement('div');
+    wmLayer.style.cssText = 'position:absolute; left:0; top:0; right:0; bottom:0; z-index:1; display:flex; align-items:center; justify-content:center; pointer-events:none; overflow:hidden;';
+    var wmSpan = document.createElement('span');
+    wmSpan.style.cssText = 'position:absolute; left:50%; top:50%; transform:translate(-50%,-50%) rotate(-30deg); font-family:"SimSun","宋体",serif; font-size:88pt; font-weight:bold; color:rgba(183,28,28,0.07); white-space:nowrap; line-height:1;';
+    wmSpan.textContent = '铁途学练';
+    wmLayer.appendChild(wmSpan);
+    pageDiv.appendChild(wmLayer);
     pagesWrap.appendChild(pageDiv);
     curInner = inner;
     return inner;
@@ -6444,7 +6726,7 @@ function exportWrongToPrint() {
     var node = tmp.firstElementChild;
     if (!node) return;
     curInner.appendChild(node);
-    if (curInner.getBoundingClientRect().height > MAX_H && curInner.childElementCount > 1) {
+    if (curInner.getBoundingClientRect().height > (curInner.parentNode.clientHeight - 8) && curInner.childElementCount > 1) {
       curInner.removeChild(node);
       newPageInner();
       curInner.appendChild(node);
@@ -6501,17 +6783,18 @@ function exportWrongToPrint() {
     return showToast('导出组件未加载，请联网后重试', true);
   }
 
-  html2pdf().set(opt).from(element).toPdf().get('pdf').then(function(pdf) {
-    var totalPages = pdf.internal.getNumberOfPages();
-    for (var i = 1; i <= totalPages; i++) {
-      pdf.setPage(i);
-      pdf.addImage(wmDataUrl, 'PNG', 0, 0, 210, 297);
-    }
+    document.documentElement.style.overflow = 'hidden';
+  buildPdfFromPages(element, wmDataUrl, function (doneN, totalN) {
+    showToast('正在生成 PDF… 第 ' + doneN + '/' + totalN + ' 页');
+  }).then(function(pdf) {
+    document.documentElement.style.overflow = '';
     finalizePdfExport(pdf, fileName, element, '导出成功，请保存或打印');
   }).catch(function(err) {
-    document.body.removeChild(element);
+    document.documentElement.style.overflow = '';
+    if (element && element.parentNode) document.body.removeChild(element);
+    window.__pdfBusy = false;
     showToast('生成 PDF 失败，请重试', true);
-    console.error(err);
+    console.error('[导出] 生成失败：' + (err && (err.message || err.code || err) || '未知错误'), err);
   });
 }
 function exportExamToWord(isPreview) {
@@ -6545,22 +6828,31 @@ function exportExamToWord(isPreview) {
   /* ★ 真实测量分页：每页固定 A4 可用高度，逐题测量是否放得下，放不下就换页
      旧方案靠“估算高度 + 强制分页”，估不准就会把题目切断（页面顶部出现半截字），还会产生空白页 */
   var PAGE_W_MM = 190;          // A4 210mm 减去左右各 10mm 页边距
-  var PAGE_H_PX = 1047;         // 277mm 可用高度，按 96dpi 折成 px
-  var MAX_H = 1000;             // 内容安全线，留 47px 余量，绝不越界
+  var PAGE_H_MM = 277;          // A4 可用高度 277mm，用 mm 单位保证与 190mm 宽同比
+  var MAX_H = 0;                // 已改为按每页实际高度动态计算，此变量仅保留占位
 
   var pagesWrap = document.createElement('div');
   // ★ 生成用的容器必须挪到屏幕外：以前它直接挂在 body 上，190mm 宽的长条会一直显示在页面底部，
   // 看上去像“预览页”，而且关不掉。这里放到视口外，html2canvas 仍能正常截图。
-  pagesWrap.style.cssText = 'position:fixed; left:-9999px; top:0; z-index:-1; pointer-events:none; width:' + PAGE_W_MM + 'mm; padding:0 15px; box-sizing:border-box; background:#fff; font-family:"SimSun","宋体",serif; font-size:13pt; line-height:1.6; color:#000;';
+  pagesWrap.style.cssText = 'position:absolute; left:0; top:0; z-index:-1; pointer-events:none; width:' + PAGE_W_MM + 'mm; padding:0 15px; box-sizing:border-box; background:#fff; font-family:"SimSun","宋体",serif; font-size:13pt; line-height:1.6; color:#000;';
   document.body.appendChild(pagesWrap);
 
   var curInner = null;
   function newPageInner() {
     var pageDiv = document.createElement('div');
     pageDiv.className = 'pdf-page';
-    pageDiv.style.cssText = 'width:100%; height:' + PAGE_H_PX + 'px; box-sizing:border-box; overflow:hidden; background:#fff;';
+    pageDiv.style.cssText = 'position:relative; width:100%; height:' + PAGE_H_MM + 'mm; box-sizing:border-box; overflow:hidden; background:#fff;';
     var inner = document.createElement('div');
+    inner.style.cssText = 'position:relative; z-index:2;';
     pageDiv.appendChild(inner);
+    // 水印直接画进页面里：跟着页面一起截图，位置恒定，也不会像整页 PNG 那样把正文糊成白雾
+    var wmLayer = document.createElement('div');
+    wmLayer.style.cssText = 'position:absolute; left:0; top:0; right:0; bottom:0; z-index:1; display:flex; align-items:center; justify-content:center; pointer-events:none; overflow:hidden;';
+    var wmSpan = document.createElement('span');
+    wmSpan.style.cssText = 'position:absolute; left:50%; top:50%; transform:translate(-50%,-50%) rotate(-30deg); font-family:"SimSun","宋体",serif; font-size:88pt; font-weight:bold; color:rgba(183,28,28,0.07); white-space:nowrap; line-height:1;';
+    wmSpan.textContent = '铁途学练';
+    wmLayer.appendChild(wmSpan);
+    pageDiv.appendChild(wmLayer);
     pagesWrap.appendChild(pageDiv);
     curInner = inner;
     return inner;
@@ -6572,7 +6864,7 @@ function exportExamToWord(isPreview) {
     var node = tmp.firstElementChild;
     if (!node) return;
     curInner.appendChild(node);
-    if (curInner.getBoundingClientRect().height > MAX_H && curInner.childElementCount > 1) {
+    if (curInner.getBoundingClientRect().height > (curInner.parentNode.clientHeight - 8) && curInner.childElementCount > 1) {
       curInner.removeChild(node);
       newPageInner();
       curInner.appendChild(node);
@@ -6630,17 +6922,18 @@ function exportExamToWord(isPreview) {
     return showToast('导出组件未加载，请联网后重试', true);
   }
 
-  html2pdf().set(opt).from(element).toPdf().get('pdf').then(function(pdf) {
-    var totalPages = pdf.internal.getNumberOfPages();
-    for (var i = 1; i <= totalPages; i++) {
-      pdf.setPage(i);
-      pdf.addImage(wmDataUrl, 'PNG', 0, 0, 210, 297);
-    }
+    document.documentElement.style.overflow = 'hidden';
+  buildPdfFromPages(element, wmDataUrl, function (doneN, totalN) {
+    showToast('正在生成 PDF… 第 ' + doneN + '/' + totalN + ' 页');
+  }).then(function(pdf) {
+    document.documentElement.style.overflow = '';
     finalizePdfExport(pdf, fileName, element, '导出成功，请保存或打印');
   }).catch(function(err) {
-    document.body.removeChild(element);
+    document.documentElement.style.overflow = '';
+    if (element && element.parentNode) document.body.removeChild(element);
+    window.__pdfBusy = false;
     showToast('生成 PDF 失败，请重试', true);
-    console.error(err);
+    console.error('[导出] 生成失败：' + (err && (err.message || err.code || err) || '未知错误'), err);
   });
 }
 // ================= 笔记与纠错功能核心 =================
