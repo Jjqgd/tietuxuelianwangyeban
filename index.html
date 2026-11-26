@@ -6391,7 +6391,8 @@ function debugIoErr(e) {
 // App 端策略：先转 ArrayBuffer 再写（比直接写 Blob 兼容性强得多）；
 // 目录按「下载目录 → 私有目录」依次尝试，原名写不进去再用纯英文文件名重来一遍。
 function savePdfBlob(blob, fileName, onDone, onFail) {
-  if (typeof plus === 'undefined' || !plus.io || !plus.io.resolveLocalFileSystemURL) {
+  var inApp = (typeof plus !== 'undefined' && plus.android);
+  if (!inApp) {
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url; a.download = fileName;
@@ -6400,119 +6401,22 @@ function savePdfBlob(blob, fileName, onDone, onFail) {
     onDone(fileName, true);
     return;
   }
-
-  var settled = false;
-  var tried = [];
-  function ok(p, isPub) { if (settled) return; settled = true; onDone(p, isPub); }
-  function bad() { if (settled) return; settled = true; onFail(tried.join(' ; ')); }
-
-  var asciiName = 'tietuxuelian-' + (new Date().getTime()) + '.pdf';
-
-  function getTargets() {
-    var list = [];
+  if (typeof hkSaveBytes !== 'function') { onFail('保存组件未加载'); return; }
+  var fr = new FileReader();
+  fr.onload = function () {
     try {
-      var dl = plus.io.PUBLIC_DOWNLOADS || '_downloads/';
-      list.push({ url: dl, isPub: true, label: '下载目录' });
-    } catch (e) {}
-    list.push({ url: '_doc/', sub: '铁途学练导出', isPub: false, label: '私有目录' });
-    list.push({ url: '_doc/', isPub: false, label: '私有根目录' });
-    return list;
-  }
-
-  function writeOnce(dirEntry, name, buf, isPub, next) {
-    dirEntry.getFile(name, { create: true, exclusive: false }, function (fe) {
-      fe.createWriter(function (w) {
-        var done = false;
-        w.onwrite = function () {
-          if (done) return; done = true;
-          var p = fe.fullPath || name;
-          try { if (plus.io.convertLocalFileSystemURL) p = plus.io.convertLocalFileSystemURL(p) || p; } catch (e) {}
-          ok(p, isPub);
-        };
-        w.onerror = function (e) {
-          if (done) return; done = true;
-          tried.push((isPub ? '下载目录' : '私有目录') + '写入失败(' + debugIoErr(e) + ')');
-          next();
-        };
-        try { w.write(buf); } catch (e) {
-          if (done) return; done = true;
-          tried.push((isPub ? '下载目录' : '私有目录') + '写入抛错(' + debugIoErr(e) + ')');
-          next();
-        }
-      }, function (e) { tried.push('createWriter失败(' + debugIoErr(e) + ')'); next(); });
-    }, function (e) { tried.push('getFile失败(' + debugIoErr(e) + ')'); next(); });
-  }
-
-  function resolveAndWrite(t, name, buf, next) {
-    plus.io.resolveLocalFileSystemURL(t.url, function (root) {
-      if (t.sub) {
-        root.getDirectory(t.sub, { create: true }, function (dir) {
-          writeOnce(dir, name, buf, t.isPub, next);
-        }, function (e) { tried.push(t.label + '建子目录失败(' + debugIoErr(e) + ')'); next(); });
-      } else {
-        writeOnce(root, name, buf, t.isPub, next);
-      }
-    }, function (e) { tried.push(t.label + '解析失败(' + debugIoErr(e) + ')'); next(); });
-  }
-
-  function runPass(name, buf, doneCb) {
-    var list = getTargets();
-    var i = 0;
-    function step() {
-      if (settled) return;
-      if (i >= list.length) { doneCb(); return; }
-      var t = list[i++];
-      resolveAndWrite(t, name, buf, step);
-    }
-    step();
-  }
-
-  function startIo() {
-  try {
-    var fr = new FileReader();
-    fr.onload = function () {
-      runPass(fileName, fr.result, function () {
-        if (settled) return;
-        tried.push('原名全部失败，改用英文文件名重试');
-        runPass(asciiName, fr.result, function () {
-          if (settled) return;
-          tried.push('改用 Blob 直写重试');
-          runPass(fileName, blob, function () {
-            tried.push('改用系统原生写入');
-            saveViaNativeJava(blob, fileName, function (p, isPub) { ok(p, isPub); }, function (e) {
-              tried.push('系统原生写入失败(' + debugIoErr(e) + ')');
-              bad();
-            });
-          });
-        });
-      });
-    };
-    fr.onerror = function () {
-      runPass(fileName, blob, function () {
-        runPass(asciiName, blob, function () { bad(); });
-      });
-    };
-    fr.readAsArrayBuffer(blob);
-  } catch (e) {
-    runPass(fileName, blob, function () {
-            tried.push('改用系统原生写入');
-            saveViaNativeJava(blob, fileName, function (p, isPub) { ok(p, isPub); }, function (e) {
-              tried.push('系统原生写入失败(' + debugIoErr(e) + ')');
-              bad();
-            });
-          });
-  }
-  }
-
-  // App 端优先走系统原生写入：App 专属目录不需要任何存储权限，也避开 plus.io 写二进制的老坑。
-  // 原生那条路失败才回落到上面这套 plus.io 多路径尝试。
-  saveViaNativeJava(blob, fileName, function (p, isPub) { ok(p, isPub); }, function (e) {
-    console.log('[导出] 原生写入失败，回落到 plus.io：' + e);
-    tried.push('原生写入失败(' + e + ')');
-    startIo();
-  });
+      var u8 = new Uint8Array(fr.result);
+      showToast('正在保存 ' + Math.max(1, Math.round(u8.length / 1024)) + ' KB，请稍候…');
+      setTimeout(function () {
+        try {
+          hkSaveBytes(u8, fileName, 'application/pdf', function (path, isPub) { onDone(path, isPub); }, function (msg) { onFail(msg || '保存失败'); });
+        } catch (e2) { onFail(String(e2)); }
+      }, 50);
+    } catch (e) { onFail(String(e)); }
+  };
+  fr.onerror = function () { onFail('读取 PDF 数据失败'); };
+  fr.readAsArrayBuffer(blob);
 }
-
 
 /* ===== 逐页生成 PDF =====
    老做法把整条长元素一次性交给 html2pdf，有几个坑：
@@ -6521,7 +6425,28 @@ function savePdfBlob(blob, fileName, onDone, onFail) {
    3) html2pdf 的 from() 会把元素搬进它自己的容器，搬完之后元素坐标就变了，
       于是第二页往后全被截成空白。
    现在：每页单独复制到一个固定在 (0,0) 的容器里截图 → 在画布上合成水印 → 逐页 addImage 拼进同一个 PDF。 */
+// 导出遮罩：盖住临时排版容器，避免生成 PDF 时纸张在页面底层闪动
+function showPdfOverlay(msg) {
+  hidePdfOverlay();
+  var ov = document.createElement('div');
+  ov.id = 'pdfOverlay';
+  ov.style.cssText = 'position:fixed;left:0;top:0;width:100%;height:100%;background:#fff;z-index:2147483600;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:"SimSun","宋体",serif;overscroll-behavior:contain;';
+  ov.innerHTML = '<style>@keyframes pdfspin{to{transform:rotate(360deg)}}</style>'
+    + '<div style="width:40px;height:40px;border:4px solid #eee;border-top-color:#b71c1c;border-radius:50%;animation:pdfspin .9s linear infinite;"></div>'
+    + '<div id="pdfOverlayMsg" style="margin-top:14px;font-size:14px;color:#555;">' + (msg || '正在生成 PDF…') + '</div>';
+  document.body.appendChild(ov);
+  return ov;
+}
+function hidePdfOverlay() {
+  var ov = document.getElementById('pdfOverlay');
+  if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
+}
+function setPdfOverlayMsg(t) {
+  var m = document.getElementById('pdfOverlayMsg');
+  if (m) m.textContent = t;
+}
 function buildPdfFromPages(element, wmDataUrl, onProgress) {
+  var t0 = Date.now(); window.__pdfT0 = t0;
   var pages = element.querySelectorAll('.pdf-page');
   if (!pages || pages.length === 0) pages = [element];
   var A4_W = 210, A4_H = 297, MARGIN = 10;
@@ -6586,7 +6511,7 @@ function buildPdfFromPages(element, wmDataUrl, onProgress) {
             var o = {
               margin: 0,
               html2canvas: {
-                scale: 2, useCORS: true, backgroundColor: '#ffffff',
+                scale: 1.3, useCORS: true, backgroundColor: '#ffffff',
                 width: cw, height: ch,
                 windowWidth: cw + 40, windowHeight: ch + 40,
                 x: 0, y: 0, scrollX: 0, scrollY: 0
@@ -6598,7 +6523,7 @@ function buildPdfFromPages(element, wmDataUrl, onProgress) {
 
             return html2pdf().set(o).from(one).toCanvas().get('canvas').then(function (cv) {
               /* 水印已随页面一起截图，无需在画布上重复绘制 */
-              var url = cv.toDataURL('image/jpeg', 0.95);
+              var url = cv.toDataURL('image/jpeg', 0.72);
               if (reuseFirst) { pdf.setPage(1); reuseFirst = false; }
               else { pdf.addPage(); }
               pdf.addImage(url, 'JPEG', MARGIN, MARGIN, CONTENT_W, CONTENT_H);
@@ -6613,7 +6538,10 @@ function buildPdfFromPages(element, wmDataUrl, onProgress) {
           });
         });
 
-        return chain.then(function () { return pdf; });
+        return chain.then(function () {
+          try { console.log('[导出] 生成用时 ' + (Date.now() - t0) + 'ms（' + total + ' 页）'); } catch (e) {}
+          return pdf;
+        });
       });
   });
 }
@@ -6621,23 +6549,29 @@ function buildPdfFromPages(element, wmDataUrl, onProgress) {
 // 统一收尾：水印已加在 pdf 上，按环境落盘并提示导出状态
 function finalizePdfExport(pdf, fileName, element, successMsg) {
   var removed = false;
-  function cleanup() { if (element && element.parentNode) document.body.removeChild(element); removed = true; }
+  function cleanup() { if (element && element.parentNode) document.body.removeChild(element); hidePdfOverlay(); removed = true; }
   // 兜底：万一写文件回调始终不回来（老机型 plus.io 偶发无响应），12 秒后也把临时容器清掉
   var watchdog = setTimeout(function () { if (!removed) cleanup(); }, 12000);
   var blob;
+  var tSave = Date.now();
   try { blob = pdf.output('blob'); } catch (e) { clearTimeout(watchdog); cleanup(); showToast('生成 PDF 失败，请重试', true); console.error(e); return; }
   savePdfBlob(blob, fileName, function(path, isPublic) {
     clearTimeout(watchdog); cleanup();
+    try { console.log('[导出] 保存用时 ' + (Date.now() - tSave) + 'ms'); } catch (e) {}
     var inApp = (typeof plus !== 'undefined' && plus.io);
     if (inApp) {
-      showToast('导出成功：' + fileName + (isPublic ? '（已存到手机下载目录）' : '（已存到 铁途学练导出 目录）'));
+      var _ms = Date.now() - (window.__pdfT0 || Date.now());
+      showToast('导出成功：' + fileName + (isPublic ? '（下载目录）' : '（应用目录）') + '，用时 ' + (_ms / 1000).toFixed(1) + ' 秒');
       // App 里存完直接把文件交给系统打开，省得用户找不到目录
       try {
         var openPath = path;
         if (openPath && openPath.indexOf('file://') !== 0 && openPath.charAt(0) === '/') openPath = 'file://' + openPath;
-        setTimeout(function () {
-          try { plus.runtime.openFile(openPath); } catch (e) { console.warn('打开文件失败', e); }
-        }, 800);
+        // 存到 MediaStore 的「下载」时返回的是 Download/xxx 这种描述串，不是真路径，不能拿去 openFile
+        if (openPath && openPath.indexOf('file://') === 0) {
+          setTimeout(function () {
+            try { plus.runtime.openFile(openPath); } catch (e) { console.warn('打开文件失败', e); }
+          }, 260);
+        }
       } catch (e) {}
     }
     else showToast(successMsg || '导出成功，请保存或打印');
@@ -6698,6 +6632,7 @@ function exportWrongToPrint() {
   // 看上去像“预览页”，而且关不掉。这里放到视口外，html2canvas 仍能正常截图。
   pagesWrap.style.cssText = 'position:absolute; left:0; top:0; z-index:-1; pointer-events:none; width:' + PAGE_W_MM + 'mm; padding:0 15px; box-sizing:border-box; background:#fff; font-family:"SimSun","宋体",serif; font-size:13pt; line-height:1.6; color:#000;';
   document.body.appendChild(pagesWrap);
+  showPdfOverlay('正在生成 PDF…');
 
   var curInner = null;
   function newPageInner() {
@@ -6780,18 +6715,20 @@ function exportWrongToPrint() {
 
   if (typeof html2pdf === 'undefined') {
     document.body.removeChild(element);
+    hidePdfOverlay();
     return showToast('导出组件未加载，请联网后重试', true);
   }
 
     document.documentElement.style.overflow = 'hidden';
   buildPdfFromPages(element, wmDataUrl, function (doneN, totalN) {
-    showToast('正在生成 PDF… 第 ' + doneN + '/' + totalN + ' 页');
+    setPdfOverlayMsg('正在生成 PDF… 第 ' + doneN + '/' + totalN + ' 页');
   }).then(function(pdf) {
     document.documentElement.style.overflow = '';
     finalizePdfExport(pdf, fileName, element, '导出成功，请保存或打印');
   }).catch(function(err) {
     document.documentElement.style.overflow = '';
     if (element && element.parentNode) document.body.removeChild(element);
+    hidePdfOverlay();
     window.__pdfBusy = false;
     showToast('生成 PDF 失败，请重试', true);
     console.error('[导出] 生成失败：' + (err && (err.message || err.code || err) || '未知错误'), err);
@@ -6836,6 +6773,7 @@ function exportExamToWord(isPreview) {
   // 看上去像“预览页”，而且关不掉。这里放到视口外，html2canvas 仍能正常截图。
   pagesWrap.style.cssText = 'position:absolute; left:0; top:0; z-index:-1; pointer-events:none; width:' + PAGE_W_MM + 'mm; padding:0 15px; box-sizing:border-box; background:#fff; font-family:"SimSun","宋体",serif; font-size:13pt; line-height:1.6; color:#000;';
   document.body.appendChild(pagesWrap);
+  showPdfOverlay('正在生成 PDF…');
 
   var curInner = null;
   function newPageInner() {
@@ -6919,18 +6857,20 @@ function exportExamToWord(isPreview) {
 
   if (typeof html2pdf === 'undefined') {
     document.body.removeChild(element);
+    hidePdfOverlay();
     return showToast('导出组件未加载，请联网后重试', true);
   }
 
     document.documentElement.style.overflow = 'hidden';
   buildPdfFromPages(element, wmDataUrl, function (doneN, totalN) {
-    showToast('正在生成 PDF… 第 ' + doneN + '/' + totalN + ' 页');
+    setPdfOverlayMsg('正在生成 PDF… 第 ' + doneN + '/' + totalN + ' 页');
   }).then(function(pdf) {
     document.documentElement.style.overflow = '';
     finalizePdfExport(pdf, fileName, element, '导出成功，请保存或打印');
   }).catch(function(err) {
     document.documentElement.style.overflow = '';
     if (element && element.parentNode) document.body.removeChild(element);
+    hidePdfOverlay();
     window.__pdfBusy = false;
     showToast('生成 PDF 失败，请重试', true);
     console.error('[导出] 生成失败：' + (err && (err.message || err.code || err) || '未知错误'), err);
@@ -8500,6 +8440,191 @@ function saveCertificateImage() {
   }
 }
 
+</script>
+<script>
+/* ================= 统一落盘层（Android 10+ 存到「下载」/ 分段写 / 校验字节数） =================
+   真机上踩到的坑，这里全部绕开：
+     · plus.io 写文件：落在应用私有目录，文件管理器看不到；写 Blob 经常直接失败
+     · plus.android 的桥：一次传太大的字符串/数组会变成 null（NPE: null array）
+     · writeBytes 这条路在部分机型不可用
+   做法：先在本机应用目录按小段写（base64 解码 → write(byte[],0,n)），核对字节数；
+        再分段灌进 MediaStore 的「下载/铁途学练导出」，同样核对字节数。 */
+var HK_SAVE_DIR = '铁途学练导出';
+function hkU8of(v) {
+  if (v instanceof Uint8Array) return v;
+  if (typeof v === 'string') {
+    try { return new TextEncoder().encode(v); } catch (e) {}
+    var b = unescape(encodeURIComponent(v)), a = new Uint8Array(b.length), i;
+    for (i = 0; i < b.length; i++) a[i] = b.charCodeAt(i);
+    return a;
+  }
+  return new Uint8Array(0);
+}
+function hkToB64(u8) {
+  var s = '', CH = 0x8000, i;
+  for (i = 0; i < u8.length; i += CH) s += String.fromCharCode.apply(null, u8.subarray(i, i + CH));
+  return btoa(s);
+}
+function hkNum(v) {
+  var n = Number(v);
+  if (isFinite(n)) return n;
+  try { n = Number(plus.android.invoke(v, 'longValue')); } catch (e1) {}
+  if (isFinite(n)) return n;
+  try { n = Number(plus.android.invoke(v, 'intValue')); } catch (e2) {}
+  return isFinite(n) ? n : NaN;
+}
+function hkErr(e) {
+  try {
+    if (!e) return '未知错误';
+    if (typeof e === 'string') return e;
+    if (e.message) return e.message;
+    var s = String(e);
+    return (s && s !== '[object Object]') ? s : '未知错误';
+  } catch (x) { return '未知错误'; }
+}
+function hkDecode(b64) {
+  var err = '';
+  try { var b = plus.android.invoke('android.util.Base64', 'decode', b64, 0); if (b) return { bytes: b, err: '' }; err += '静态空;'; }
+  catch (e1) { err += '静态异常:' + hkErr(e1) + ';'; }
+  try { var C = plus.android.importClass('android.util.Base64'); var c = C.decode(b64, 0); if (c) return { bytes: c, err: '' }; err += '实例空;'; }
+  catch (e2) { err += '实例异常:' + hkErr(e2) + ';'; }
+  return { bytes: null, err: err };
+}
+function hkChunks(os, u8, size) {
+  var _lastPct = -1;
+  for (var i = 0; i < u8.length; i += size) {
+    try {
+      var _pct = Math.min(100, Math.round((i / u8.length) * 100));
+      if (_pct - _lastPct >= 20) { _lastPct = _pct; if (typeof showToast === 'function') showToast('正在保存 PDF ' + _pct + '%…'); }
+    } catch (_e) {}
+    var part = u8.subarray(i, Math.min(i + size, u8.length));
+    var g = hkDecode(hkToB64(part));
+    if (!g.bytes) throw new Error('第 ' + i + ' 字节处解码为空（' + g.err + '）');
+    plus.android.invoke(os, 'write', g.bytes, 0, part.length);
+  }
+}
+function hkClose(os) {
+  try { plus.android.invoke(os, 'flush'); } catch (e1) {}
+  try { plus.android.invoke(os, 'close'); } catch (e2) {}
+}
+function hkLen(f) {
+  try { var n = hkNum(plus.android.invoke(f, 'length')); if (isFinite(n) && n >= 0) return n; } catch (e1) {}
+  try {
+    var FIS = plus.android.importClass('java.io.FileInputStream');
+    var fis = new FIS(String(plus.android.invoke(f, 'getAbsolutePath')));
+    var a = hkNum(plus.android.invoke(fis, 'available'));
+    try { plus.android.invoke(fis, 'close'); } catch (e2) {}
+    if (isFinite(a) && a >= 0) return a;
+  } catch (e3) {}
+  return -1;
+}
+function hkWriteLocal(u8, fileName) {
+  var tried = [], main, JFile, FOS, base, sub, f, path;
+  try {
+    main = plus.android.runtimeMainActivity();
+    if (!main) return { ok: false, msg: '取不到界面' };
+    JFile = plus.android.importClass('java.io.File');
+    base = main.getExternalFilesDir(null) || main.getFilesDir();
+    if (!base) return { ok: false, msg: '取不到应用目录' };
+    sub = new JFile(base, HK_SAVE_DIR);
+    if (!sub.exists()) sub.mkdirs();
+    f = new JFile(sub, fileName);
+    path = String(plus.android.invoke(f, 'getAbsolutePath'));
+    FOS = plus.android.importClass('java.io.FileOutputStream');
+  } catch (e0) { return { ok: false, msg: '准备目录失败：' + hkErr(e0) }; }
+  var sizes = [65536, 32768, 16384, 8192, 4096, 2048, 1024];
+  for (var s = 0; s < sizes.length; s++) {
+    var sz = sizes[s];
+    try {
+      try { plus.android.invoke(new JFile(path), 'delete'); } catch (e1) {}
+      var os = new FOS(path);
+      try {
+        // 先只写第一块，核对字节数；对不上就立刻换下一档，不把整份白写一遍
+        var first = Math.min(sz, u8.length);
+        var g = hkDecode(hkToB64(u8.subarray(0, first)));
+        if (!g.bytes) throw new Error('首块解码为空（' + g.err + '）');
+        plus.android.invoke(os, 'write', g.bytes, 0, first);
+        var got = hkLen(new JFile(path));
+        if (got !== first) throw new Error('首块只写了 ' + got + ' 字节（应为 ' + first + '）');
+        var lastPct = -1;
+        for (var k = first; k < u8.length; k += sz) {
+          var part = u8.subarray(k, Math.min(k + sz, u8.length));
+          var g2 = hkDecode(hkToB64(part));
+          if (!g2.bytes) throw new Error('第 ' + k + ' 字节处解码为空（' + g2.err + '）');
+          plus.android.invoke(os, 'write', g2.bytes, 0, part.length);
+          try {
+            var pct = Math.min(100, Math.round((Math.min(k + sz, u8.length) / u8.length) * 100));
+            if (pct - lastPct >= 25) { lastPct = pct; if (typeof showToast === 'function') showToast('正在保存 PDF ' + pct + '%…'); }
+          } catch (_x) {}
+        }
+      } finally { hkClose(os); }
+      var n = hkLen(new JFile(path));
+      if (n === u8.length) return { ok: true, path: path, size: n, how: '分段 ' + sz };
+      tried.push(sz + '字节段：只写了 ' + (n < 0 ? '未知' : n) + '（应为 ' + u8.length + '）');
+    } catch (e2) { tried.push(sz + '字节段：' + hkErr(e2)); }
+  }
+  return { ok: false, msg: tried.join('；') };
+}
+
+function hkMediaSize(resolver, uri) {
+  try {
+    var pfd = plus.android.invoke(resolver, 'openFileDescriptor', uri, 'r');
+    if (pfd) { var s = hkNum(plus.android.invoke(pfd, 'getStatSize')); try { plus.android.invoke(pfd, 'close'); } catch (e) {} if (s >= 0) return s; }
+  } catch (e1) {}
+  return -1;
+}
+function hkPublish(u8, fileName, mime) {
+  var uri = null, resolver = null;
+  try {
+    var main = plus.android.runtimeMainActivity();
+    resolver = main.getContentResolver();
+    if (!resolver) return { ok: false, msg: '取不到 ContentResolver' };
+    var Uri = plus.android.importClass('android.net.Uri');
+    var CV = plus.android.importClass('android.content.ContentValues');
+    var cv = new CV();
+    cv.put('_display_name', fileName);
+    cv.put('mime_type', mime);
+    cv.put('relative_path', 'Download/' + HK_SAVE_DIR);
+    var base = Uri.parse('content://media/external/downloads');
+    try { uri = plus.android.invoke(resolver, 'insert', base, cv); } catch (e1) { uri = null; }
+    if (!uri) return { ok: false, msg: '系统拒绝登记' };
+  } catch (e0) { return { ok: false, msg: hkErr(e0) }; }
+  var sizes = [65536, 16384], last = '没有可用的写法';
+  for (var s = 0; s < sizes.length; s++) {
+    var sz = sizes[s], os = null;
+    try {
+      os = plus.android.invoke(resolver, 'openOutputStream', uri);
+      if (!os) { last = '打不开输出流'; break; }
+      try { hkChunks(os, u8, sz); } finally { hkClose(os); }
+      var n = hkMediaSize(resolver, uri);
+      if (n === u8.length) return { ok: true, size: n, uri: String(uri), where: '下载/' + HK_SAVE_DIR + '/' + fileName };
+      last = sz + '字节段：只写了 ' + (n < 0 ? '未知' : n) + '（应为 ' + u8.length + '）';
+    } catch (e2) { last = sz + '字节段：' + hkErr(e2); try { hkClose(os); } catch (e3) {} }
+  }
+  try { plus.android.invoke(resolver, 'delete', uri, null, null); } catch (e4) {}
+  return { ok: false, msg: last };
+}
+
+/* 总入口：成功回调 (路径, 是否下载目录)，失败回调 (原因) */
+function hkSaveBytes(u8, fileName, mime, ok, fail) {
+  if (!(window.plus && plus.android)) {
+    try {
+      var url = URL.createObjectURL(new Blob([u8], { type: mime }));
+      var a = document.createElement('a');
+      a.href = url; a.download = fileName;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+      ok(fileName, true);
+    } catch (e) { fail(hkErr(e)); }
+    return;
+  }
+  /* 先直接写「下载」并核对字节数，成功就结束（省掉本机那一遍，速度快一倍） */
+  var pub = hkPublish(u8, fileName, mime);
+  if (pub.ok) { ok(pub.where, true); return; }
+  var local = hkWriteLocal(u8, fileName);
+  if (local.ok) { ok(local.path, false); return; }
+  fail('写下载目录失败：' + pub.msg + '；本机也失败：' + local.msg);
+}
 </script>
 </body>
 </html>
